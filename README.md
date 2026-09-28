@@ -2,7 +2,7 @@
 
 Developer Integration Guide | 0.2.0-review
 
-[OpenAPI specification](./openapi.yaml) · [API reference PDF](./TLAY_Physical_Energy_Service_API_Reference.pdf)
+[OpenAPI specification](./openapi.yaml) · [API reference PDF](./TLAY_Physical_Energy_Service_API_Reference.pdf) · [Web documentation](https://tlay-io.github.io/physical-energy-service/)
 
 ## Overview
 

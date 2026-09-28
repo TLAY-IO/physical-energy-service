@@ -1,0 +1,644 @@
+openapi: 3.0.3
+info:
+  title: TLAY Physical Energy Service
+  version: 0.2.0-review
+  description: 'Application API contract for an eCandle physical energy service: offer discovery, authorized
+    purchase, asynchronous execution and delivery receipts. Integration review version; deployment and
+    end-to-end validation pending. Relative paths require an operator-provided base URL.'
+  contact:
+    name: TLAY
+    url: https://www.tlay.io/
+x-implementation-status: proposed; deployment and interoperability tests pending
+paths:
+  /v1/energy/offers:
+    get:
+      operationId: listEnergyOffers
+      summary: Discover available energy offers
+      security: []
+      responses:
+        '200':
+          description: Public offers. Availability is indicative until a quote reserves capacity.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Offer'
+        '429':
+          description: Rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/energy/quotes:
+    post:
+      operationId: createEnergyQuote
+      summary: Authorize and reserve a short-lived offer before payment
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuoteRequest'
+      responses:
+        '201':
+          description: Quote created. Same grant and nonce return the same unexpired reservation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+        '400':
+          description: Invalid parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Site/output permission denied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Unavailable capacity or nonce conflict.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/energy/sessions:
+    post:
+      operationId: purchaseEnergySession
+      summary: Purchase one physical energy session via x402
+      description: x402-gated purchase. An unpaid request receives 402. Retry the identical body and Idempotency-Key
+        with a valid SDK-generated payment payload. 202 confirms an accepted session, not completed delivery.
+        Payment network, asset, seller address and facilitator configuration are supplied by the deployment.
+      security: []
+      x-payment-protocol: x402; deployment profile pending confirmation
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 16
+          maxLength: 128
+      - name: PAYMENT-SIGNATURE
+        in: header
+        required: false
+        schema:
+          type: string
+        description: Protocol-generated payment payload on the paid retry; use the selected x402 client
+          SDK.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PurchaseRequest'
+      responses:
+        '202':
+          description: Task accepted or an authenticated idempotent replay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptedPurchase'
+          headers:
+            Location:
+              description: Session status path.
+              schema:
+                type: string
+        '400':
+          description: Invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '402':
+          description: Payment requirements provided by the configured x402 SDK in PAYMENT-REQUIRED.
+          headers:
+            PAYMENT-REQUIRED:
+              required: true
+              description: SDK-generated, encoded x402 payment requirements.
+              schema:
+                type: string
+        '403':
+          description: Invalid authorization or payment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Expired quote, consumed reservation, mismatched request, or idempotency conflict.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Temporarily unavailable. A payment already accepted must be reconciled before a
+            new attempt.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/energy/sessions/{session_id}:
+    get:
+      operationId: getEnergySession
+      summary: Read execution and payment states
+      security:
+      - SessionToken: []
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Current session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401':
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Token not authorized for this session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Session not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/energy/sessions/{session_id}/receipt:
+    get:
+      operationId: getEnergyReceipt
+      summary: Retrieve a delivery receipt without another payment
+      security:
+      - SessionToken: []
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Terminal delivery receipt. proof_state may remain pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Receipt'
+        '202':
+          description: Physical session is not terminal yet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401':
+          description: Missing or invalid token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Access denied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Session not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/devices/{device_id}/keys/{key_id}:
+    get:
+      operationId: getDeviceKey
+      summary: Read versioned device identity and key status
+      security: []
+      parameters:
+      - name: device_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: key_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Key metadata. Trust in the registration authority remains necessary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceIdentity'
+        '404':
+          description: Unknown device or key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /healthz:
+    get:
+      operationId: getServiceHealth
+      summary: Read service health
+      security: []
+      responses:
+        '200':
+          description: Service health; does not promise physical capacity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: Degraded health.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+components:
+  securitySchemes:
+    SessionToken:
+      type: http
+      scheme: bearer
+      description: Opaque, session-scoped token issued after purchase. This is separate from x402 payment
+        authorization.
+  schemas:
+    Offer:
+      type: object
+      additionalProperties: false
+      properties:
+        offer_id:
+          type: string
+        device_id:
+          type: string
+        site_id:
+          type: string
+        output_id:
+          type: string
+        available:
+          type: boolean
+        duration_seconds:
+          type: integer
+          minimum: 1
+        max_power_w:
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+        price_usdc:
+          type: string
+          pattern: ^\d+\.\d{6}$
+          description: Decimal USDC amount; six fractional digits, not base units.
+        network:
+          type: string
+          description: CAIP-2 identifier, confirmed by deployment.
+        terms_version:
+          type: string
+        measured_at:
+          type: string
+          format: date-time
+      required:
+      - offer_id
+      - device_id
+      - site_id
+      - output_id
+      - available
+      - duration_seconds
+      - max_power_w
+      - price_usdc
+      - network
+      - terms_version
+      - measured_at
+    QuoteRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        offer_id:
+          type: string
+        client_nonce:
+          type: string
+        access_grant:
+          type: string
+          description: Opaque operator-issued permission for this site and output; never expose in public
+            logs.
+      required:
+      - offer_id
+      - client_nonce
+      - access_grant
+      example:
+        offer_id: offer_demo
+        client_nonce: buyer_nonce_demo
+        access_grant: operator_issued_grant
+    Quote:
+      type: object
+      additionalProperties: false
+      properties:
+        quote_id:
+          type: string
+        offer:
+          $ref: '#/components/schemas/Offer'
+        expires_at:
+          type: string
+          format: date-time
+        start_by:
+          type: string
+          format: date-time
+        request_digest:
+          type: string
+          description: Digest of the immutable authorized purchase context.
+        refund_policy:
+          type: string
+          description: Versioned rule for failed or partial delivery; finalized before accepting payment.
+      required:
+      - quote_id
+      - offer
+      - expires_at
+      - start_by
+      - request_digest
+      - refund_policy
+    PurchaseRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        quote_id:
+          type: string
+        client_nonce:
+          type: string
+      required:
+      - quote_id
+      - client_nonce
+      example:
+        quote_id: quote_demo
+        client_nonce: buyer_nonce_demo
+    AcceptedPurchase:
+      type: object
+      additionalProperties: false
+      properties:
+        session:
+          $ref: '#/components/schemas/Session'
+        access_token:
+          type: string
+          description: Opaque bearer token for this session only; store securely and exclude from receipts.
+      required:
+      - session
+      - access_token
+    Session:
+      type: object
+      additionalProperties: false
+      properties:
+        session_id:
+          type: string
+        quote_id:
+          type: string
+        device_id:
+          type: string
+        state:
+          type: string
+          enum:
+          - accepted
+          - starting
+          - running
+          - completed
+          - partially_completed
+          - failed
+        payment_state:
+          type: string
+          enum:
+          - accepted
+          - settlement_pending
+          - settled
+          - refund_pending
+          - partially_refunded
+          - refunded
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+        delivered_seconds:
+          type: integer
+          minimum: 0
+        energy_wh:
+          type: number
+          minimum: 0
+        receipt_id:
+          type: string
+        failure_code:
+          type: string
+        payment_reference:
+          type: string
+          description: Application payment reference; not necessarily an onchain transaction hash.
+      required:
+      - session_id
+      - quote_id
+      - device_id
+      - state
+      - payment_state
+      - created_at
+      - delivered_seconds
+      - payment_reference
+      example:
+        session_id: session_demo
+        quote_id: quote_demo
+        device_id: ecandle_demo
+        state: accepted
+        payment_state: accepted
+        created_at: '2026-09-27T10:00:00Z'
+        delivered_seconds: 0
+        payment_reference: payment_demo
+    SignedMeasurement:
+      type: object
+      additionalProperties: false
+      properties:
+        device_id:
+          type: string
+        key_id:
+          type: string
+        payload_b64:
+          type: string
+          description: Base64 of exact device-signed bytes; decode and verify without reserializing.
+        signature_b64:
+          type: string
+        signature_profile:
+          type: string
+          description: Versioned, allowlisted signature and payload interpretation profile.
+        payload_digest:
+          type: string
+          description: 'sha256: followed by lowercase hex of decoded payload bytes.'
+      required:
+      - device_id
+      - key_id
+      - payload_b64
+      - signature_b64
+      - signature_profile
+      - payload_digest
+    Receipt:
+      type: object
+      additionalProperties: false
+      properties:
+        receipt_id:
+          type: string
+        session_id:
+          type: string
+        quote_id:
+          type: string
+        request_digest:
+          type: string
+        client_nonce:
+          type: string
+        payment_reference:
+          type: string
+        settlement_tx_hash:
+          type: string
+          description: Optional; only populated after a real settlement transaction exists.
+        session_state:
+          type: string
+          enum:
+          - completed
+          - partially_completed
+          - failed
+        delivered_seconds:
+          type: integer
+          minimum: 0
+        energy_wh:
+          type: number
+          minimum: 0
+        issued_at:
+          type: string
+          format: date-time
+        measurements:
+          type: array
+          items:
+            $ref: '#/components/schemas/SignedMeasurement'
+        proof_state:
+          type: string
+          enum:
+          - pending
+          - ready
+          - unavailable
+        proof_bundle:
+          $ref: '#/components/schemas/ProofBundle'
+      required:
+      - receipt_id
+      - session_id
+      - quote_id
+      - request_digest
+      - client_nonce
+      - payment_reference
+      - session_state
+      - delivered_seconds
+      - issued_at
+      - measurements
+      - proof_state
+    ProofBundle:
+      type: object
+      additionalProperties: false
+      properties:
+        profile:
+          type: string
+          description: Versioned HashAnchor verification profile; actual profile must be confirmed before
+            launch.
+        artifact_b64:
+          type: string
+          description: Base64 of the complete portable proof artifact.
+        verifier_version:
+          type: string
+      required:
+      - profile
+      - artifact_b64
+      - verifier_version
+    DeviceIdentity:
+      type: object
+      additionalProperties: false
+      properties:
+        device_id:
+          type: string
+        key_id:
+          type: string
+        public_key:
+          type: string
+        signature_profile:
+          type: string
+        valid_from:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum:
+          - active
+          - retired
+          - revoked
+        revoked_at:
+          type: string
+          format: date-time
+      required:
+      - device_id
+      - key_id
+      - public_key
+      - signature_profile
+      - valid_from
+      - status
+    Error:
+      type: object
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        request_id:
+          type: string
+        retryable:
+          type: boolean
+      required:
+      - code
+      - message
+      - request_id
+      - retryable
+      example:
+        code: QUOTE_EXPIRED
+        message: Request a new quote before making a new payment.
+        request_id: request_demo
+        retryable: false
+    Health:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum:
+          - ok
+          - degraded
+        version:
+          type: string
+      required:
+      - status
+      - version
